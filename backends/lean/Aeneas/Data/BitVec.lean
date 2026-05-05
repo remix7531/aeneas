@@ -479,6 +479,40 @@ theorem BitVec.toBEBytes_length {w} (v : BitVec w) (h : w % 8 = 0) :
   unfold toBEBytes
   simp only [List.length_reverse, toLEBytes_length, h]
 
+/-- Byte `i` of `bv.toBEBytes` (for any `BitVec n` with `n` a multiple of 8)
+equals `setWidth 8 ((bv >>> ((N-1-i)*8)) &&& 0xff)` where `N = n / 8`. The
+shift-and-mask form is the natural target when refining big-endian byte
+extraction code against bit-vector arithmetic. -/
+theorem BitVec.toBEBytes_getElem!_eq_shift_mask
+    {n : Nat} (h8 : n % 8 = 0) (bv : BitVec n) (i : Nat) (hi : i < n / 8) :
+    (bv.toBEBytes : List Byte)[i]! =
+      BitVec.setWidth 8 ((bv >>> ((n / 8 - 1 - i) * 8)) &&& BitVec.ofNat n 0xff) := by
+  set N := n / 8
+  have hlen_le : bv.toLEBytes.length = N := BitVec.toLEBytes_length bv h8
+  have h_be_eq_le : (bv.toBEBytes : List Byte)[i]! = bv.toLEBytes[N - 1 - i]! := by
+    show (bv.toLEBytes.reverse)[i]! = bv.toLEBytes[N - 1 - i]!
+    rw [getElem!_pos _ _ (by simp [hlen_le]; omega),
+        getElem!_pos _ _ (by simp [hlen_le]; omega),
+        List.getElem_reverse]
+    simp [hlen_le]
+  rw [h_be_eq_le]
+  apply BitVec.eq_of_getElem_eq
+  intro j hj
+  rw [BitVec.getElem_setWidth]
+  show (bv.toLEBytes[N - 1 - i]!).getLsbD j = _
+  have h_lhs : (bv.toLEBytes[N - 1 - i]!).getLsbD j = bv[8 * (N - 1 - i) + j]! :=
+    BitVec.toLEBytes_getElem!_testBit bv (N - 1 - i) j hj
+  rw [h_lhs, BitVec.getLsbD_and, BitVec.getLsbD_ushiftRight]
+  have hbnd : 8 * (N - 1 - i) + j < n := by omega
+  rw [getElem!_pos bv _ hbnd]
+  have hmask : (BitVec.ofNat n 0xff).getLsbD j = true := by
+    rw [BitVec.getLsbD_ofNat]; simp [show j < n from by omega]
+    show (0xff : Nat).testBit j = true
+    rw [show (0xff : Nat) = 2 ^ 8 - 1 from rfl, Nat.testBit_two_pow_sub_one]
+    exact decide_eq_true hj
+  rw [hmask, Bool.and_true]
+  congr 1; ring
+
 @[simp, simp_lists_safe, grind =, agrind =]
 theorem BitVec.getElem!_default_eq_false {w} (i : ℕ) :
   (default : BitVec w)[i]! = false := by simp only [default, zero_eq, getElem!_zero]
