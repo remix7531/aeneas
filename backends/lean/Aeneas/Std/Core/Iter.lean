@@ -307,3 +307,109 @@ def core.iter.traits.iterator.IteratorRange {A : Type}
 structure core.iter.adapters.map.Map (I : Type u) (F : Type v) where
   iter : I
   f : F
+
+/-!
+## Range loop ↔ `Fin.foldl`
+
+Aeneas translates `for i in 0..N { state = action(i, state); }` into a loop
+that pulls each index from a range iterator and threads `state` through.
+The lemma `range_loop_eq_finFoldl` collapses such a loop to a pure
+`Fin.foldl N.val f init`, given a per-index spec for `action`.
+
+`partialFinFoldl` is the obvious partial fold over the first `k` indices
+of `Fin N`; it serves as the loop invariant.
+-/
+
+/-- `Fin.foldl` over the first `k` indices of `Fin N`, when `k ≤ N`. The
+index type is fixed at `Fin N` so it composes with loop invariants in
+which the running counter `k` varies but `N` is fixed. -/
+def partialFinFoldl {α : Type} (N : Nat) (f : α → Fin N → α) (k : Nat) (init : α) : α :=
+  Fin.foldl k (fun s i => if h : i.val < N then f s ⟨i.val, h⟩ else s) init
+
+theorem partialFinFoldl_zero {α : Type} (N : Nat) (f : α → Fin N → α) (init : α) :
+    partialFinFoldl N f 0 init = init := by
+  unfold partialFinFoldl; rw [Fin.foldl_zero]
+
+theorem partialFinFoldl_succ {α : Type} (N : Nat) (f : α → Fin N → α)
+    (k : Nat) (h : k < N) (init : α) :
+    partialFinFoldl N f (k + 1) init =
+      f (partialFinFoldl N f k init) ⟨k, h⟩ := by
+  unfold partialFinFoldl
+  rw [Fin.foldl_succ_last]
+  simp [h]
+
+theorem partialFinFoldl_full {α : Type} (N : Nat) (f : α → Fin N → α) (init : α) :
+    partialFinFoldl N f N init = Fin.foldl N f init := by
+  unfold partialFinFoldl
+  congr
+  funext s i
+  have : i.val < N := i.isLt
+  simp [this]
+
+open WP in
+/-- Aeneas `0..N` `Range Usize` loops collapse to `Fin.foldl N.val f init`.
+The loop body shape matches what Aeneas emits for `for i in 0..N { ... }`:
+pull the next index from the iterator, run `action i` on the state, recurse. -/
+theorem range_loop_eq_finFoldl
+    {α : Type} [Inhabited α]
+    (N : Usize) (init : α) (f : α → Fin N.val → α)
+    (action : Usize → α → Result α)
+    (haction : ∀ (i : Usize) (s : α) (h : i.val < N.val),
+      action i s ⦃ s' => s' = f s ⟨i.val, h⟩ ⦄) :
+    loop (fun (p : core.ops.range.Range Usize × α) =>
+      do let (o, iter') ← core.iter.range.IteratorRange.next core.iter.range.StepUsize p.1
+         match o with
+         | none => ok (.done p.2)
+         | some i => do let st' ← action i p.2; ok (.cont (iter', st')))
+      ({ start := 0#usize, «end» := N }, init)
+    ⦃ result => result = Fin.foldl N.val f init ⦄ := by
+  apply loop.spec_decr_nat
+    (measure := fun (p : core.ops.range.Range Usize × α) => N.val - p.1.start.val)
+    (inv := fun (p : core.ops.range.Range Usize × α) =>
+      p.1.«end» = N ∧ p.1.start.val ≤ N.val ∧
+      p.2 = partialFinFoldl N.val f p.1.start.val init)
+  · rintro ⟨iter, st⟩ ⟨hend, hle, hst⟩
+    simp only at hst hend hle
+    rw [core.iter.range.IteratorRange.next_Usize_def, hend]
+    by_cases hlt : iter.start.val < N.val
+    · simp only [hlt, ↓reduceIte]
+      have hspec := @UScalar.add_spec _ iter.start 1#usize (by scalar_tac)
+      simp only [WP.spec, WP.theta] at hspec
+      revert hspec
+      cases hadd : iter.start + 1#usize with
+      | ok z =>
+        intro hzv
+        simp only [WP.wp_return] at hzv
+        simp only [bind_tc_ok]
+        have hact := haction iter.start st hlt
+        simp only [WP.spec, WP.theta] at hact
+        revert hact
+        cases haction_eval : action iter.start st with
+        | ok st' =>
+          intro hact
+          simp only [WP.wp_return] at hact
+          simp only [WP.spec, WP.theta]
+          refine ⟨⟨?_, ?_, ?_⟩, ?_⟩
+          · show N = N; rfl
+          · show z.val ≤ N.val
+            scalar_tac
+          · show st' = partialFinFoldl N.val f z.val init
+            have h1usize : (1#usize : Usize).val = 1 := by decide
+            rw [hact, hzv, h1usize, hst,
+                partialFinFoldl_succ N.val f iter.start.val hlt init]
+          · show N.val - z.val < N.val - iter.start.val
+            have h1usize : (1#usize : Usize).val = 1 := by decide
+            rw [hzv, h1usize]; omega
+        | fail e => intro h; exact h.elim
+        | div => intro h; exact h.elim
+      | fail e => intro h; exact h.elim
+      | div => intro h; exact h.elim
+    · simp only [hlt, ↓reduceIte]
+      simp only [bind_tc_ok, WP.spec, WP.theta]
+      have heq : iter.start.val = N.val := by omega
+      show st = Fin.foldl N.val f init
+      rw [hst, heq, partialFinFoldl_full]
+  · refine ⟨rfl, ?_, ?_⟩
+    · show (0#usize : Usize).val ≤ N.val; simp
+    · show init = partialFinFoldl N.val f (0#usize : Usize).val init
+      rw [show ((0#usize : Usize).val) = 0 by decide, partialFinFoldl_zero]
