@@ -204,6 +204,31 @@ def core.convert.TryFromSharedArraySliceTryFromSliceError (T : Type) (N : Usize)
   try_from := core.array.TryFromSharedArraySlice.try_from N
 }
 
+/-- When `clone` on the underlying type is the identity (i.e. `clone x = ok x`,
+which is the case for every scalar `Copy` instance Aeneas generates), the
+copy variant of `try_from` returns `.Ok` with the slice contents preserved.
+
+Phrased generically so callers can specialise to whatever `Copy` instance
+they are working with by providing the trivial `clone`-is-identity fact. -/
+@[step]
+theorem core.array.TryFromArrayCopySlice.try_from.step_spec
+    {T : Type} (N : Usize) (copyInst : core.marker.Copy T) (s : Slice T)
+    (h : s.length = N.val)
+    (hclone : ∀ x : T, copyInst.cloneInst.clone x = Result.ok x) :
+    core.array.TryFromArrayCopySlice.try_from N copyInst s
+      ⦃ r => ∃ a : Array T N, r = core.result.Result.Ok a ∧ a.val = s.val ⦄ := by
+  unfold core.array.TryFromArrayCopySlice.try_from
+  simp only [h, ↓reduceDIte]
+  have hmap : List.mapM (m := Result) copyInst.cloneInst.clone s.val =
+              Result.ok s.val := by
+    induction s.val with
+    | nil => rfl
+    | cons x xs ih => rw [List.mapM_cons, hclone, ih]; rfl
+  split
+  · case _ s' h1 => cases h1.symm.trans hmap; simp
+  · exfalso; rename_i h1; rw [hmap] at h1; cases h1
+  · exfalso; rename_i h1; rw [hmap] at h1; cases h1
+
 @[rust_fun "core::array::{core::convert::TryFrom<&'a mut [@T; @N], &'a mut [@T], core::array::TryFromSliceError>}::try_from"]
 def core.array.TryFromMutArraySlice.try_from
   {T : Type} (N : Usize) (s : Slice T) :
