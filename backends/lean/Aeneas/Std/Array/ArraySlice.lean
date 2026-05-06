@@ -351,4 +351,129 @@ theorem Array.index_mut_SliceIndexRangeFromUsizeSlice {T : Type} {N : Usize}
   · simp [Slice.length, List.length_drop]
   · intro s'; simp [Array.from_slice, Array.to_slice]
 
+/-! ## `core::array::from_fn`
+
+Rust's `core::array::from_fn<T, const N: usize>(f: F) -> [T; N]` builds an
+array by calling a closure `f` with indices `0, 1, …, N-1`. Aeneas does
+not translate this function (higher-order stdlib with internal unsafe
+code) and emits an opaque axiom; we provide a concrete model and specs. -/
+
+/-- Recursive worker for `core.array.from_fn`: calls `call` at indices
+`i, i+1, …, N-1`, appending each output to `acc`. Terminates on `N - i`. -/
+def core.array.from_fn_aux
+    {T F : Type} (N : Usize)
+    (call : F → Usize → Result (T × F))
+    (f : F) (i : Nat) (acc : List T)
+    (hacc : acc.length = i) (hi : i ≤ N.val) :
+    Result (Array T N) :=
+  if h : i < N.val then
+    do let idx := Usize.ofNatCore i (by scalar_tac)
+       let (val, f') ← call f idx
+       core.array.from_fn_aux N call f' (i + 1) (acc ++ [val])
+         (by simp [hacc]) (by scalar_tac)
+  else
+    ok ⟨acc, by scalar_tac⟩
+termination_by N.val - i
+
+/-- [core::array::from_fn] -/
+@[rust_fun "core::array::from_fn"]
+def core.array.from_fn
+    {T F : Type} (N : Usize)
+    (FnMutInst : core.ops.function.FnMut F Usize T) :
+    F → Result (Array T N) :=
+  fun f => core.array.from_fn_aux N FnMutInst.call_mut f 0 [] (by simp) (by scalar_tac)
+
+/-- Generalized spec for `from_fn_aux`: every index of the result satisfies
+`P`, given that the closure does and that the accumulator already does. -/
+theorem core.array.from_fn_aux_spec
+    {T F : Type} [Inhabited T] (N : Usize)
+    (call : F → Usize → Result (T × F))
+    (P : Nat → T → Prop)
+    (hcall : ∀ f' (j : Usize), j.val < N.val →
+      call f' j ⦃ (val, _) => P j.val val ⦄)
+    (f : F) (i : Nat) (acc : List T)
+    (hacc : acc.length = i) (hi : i ≤ N.val)
+    (hpre : ∀ j, j < i → P j acc[j]!) :
+    core.array.from_fn_aux N call f i acc hacc hi
+      ⦃ (arr : Array T N) => ∀ j, j < N.val → P j arr.val[j]! ⦄ := by
+  unfold core.array.from_fn_aux
+  simp only [WP.spec, WP.theta]
+  split
+  · rename_i hlt
+    have hspec := hcall f (Usize.ofNatCore i (by scalar_tac)) (by scalar_tac)
+    simp only [WP.spec, WP.theta] at hspec
+    revert hspec; cases call f (Usize.ofNatCore i (by scalar_tac)) with
+    | ok p =>
+      simp only [WP.wp_return]; intro hP; simp only [bind_tc_ok]
+      apply core.array.from_fn_aux_spec N call P hcall p.2 (i + 1) (acc ++ [p.1])
+        (by simp [hacc]) (by scalar_tac)
+      intro j hj
+      by_cases hjlt : j < i
+      · simp_lists [hacc]; exact hpre j hjlt
+      · have : j = i := by scalar_tac
+        subst this; simp [hacc]; exact hP
+    | fail e => intro h; exact h
+    | div => intro h; exact h
+  · intro j hj; exact hpre j (by scalar_tac)
+
+/-- State-tracking variant of `from_fn_aux_spec`. The per-index predicate
+may depend on the *current* closure state; the call must preserve a
+state invariant `inv` and `P` must be monotone under `inv`. Useful for
+closures whose state evolves between calls. -/
+theorem core.array.from_fn_aux_state_spec
+    {T F : Type} [Inhabited T] (N : Usize)
+    (call : F → Usize → Result (T × F))
+    (inv : F → Prop)
+    (P : F → Nat → T → Prop)
+    (hcall : ∀ f' (j : Usize), j.val < N.val → inv f' →
+      call f' j ⦃ (val, f'') => inv f'' ∧ P f' j.val val ⦄)
+    (Pmono : ∀ f f' j v, inv f → inv f' → P f j v → P f' j v)
+    (f : F) (hf : inv f) (i : Nat) (acc : List T)
+    (hacc : acc.length = i) (hi : i ≤ N.val)
+    (hpre : ∀ j, j < i → P f j acc[j]!) :
+    core.array.from_fn_aux N call f i acc hacc hi
+      ⦃ (arr : Array T N) => ∀ j, j < N.val → P f j arr.val[j]! ⦄ := by
+  unfold core.array.from_fn_aux
+  simp only [WP.spec, WP.theta]
+  split
+  · rename_i hlt
+    have hspec := hcall f (Usize.ofNatCore i (by scalar_tac)) (by scalar_tac) hf
+    simp only [WP.spec, WP.theta] at hspec
+    revert hspec; cases call f (Usize.ofNatCore i (by scalar_tac)) with
+    | ok p =>
+      simp only [WP.wp_return]; intro ⟨hinv', hP⟩; simp only [bind_tc_ok]
+      apply WP.spec_mono
+      · apply core.array.from_fn_aux_state_spec N call inv P hcall Pmono p.2 hinv'
+          (i + 1) (acc ++ [p.1]) (by simp [hacc]) (by scalar_tac)
+        intro j hj
+        by_cases hjlt : j < i
+        · simp_lists [hacc]; exact Pmono f p.2 j _ hf hinv' (hpre j hjlt)
+        · have hji : j = i := by scalar_tac
+          rw [hji]; simp [hacc]
+          have hP' : P f i p.1 := by
+            have : (Usize.ofNatCore i (by scalar_tac) : Usize).val = i := by scalar_tac
+            rw [← this]; exact hP
+          exact Pmono f p.2 i p.1 hf hinv' hP'
+      · intro arr hPnext j hj
+        exact Pmono p.2 f j _ hinv' hf (hPnext j hj)
+    | fail e => intro h; exact h
+    | div => intro h; exact h
+  · intro j hj; exact hpre j (by scalar_tac)
+
+/-- Step spec for `core.array.from_fn`: each element of the result satisfies
+`P`, provided the closure produces `P`-satisfying outputs at every index
+regardless of accumulated state (covers stateless closures). -/
+@[step]
+theorem core.array.from_fn.step_spec
+    {T F : Type} [Inhabited T] (N : Usize)
+    (inst : core.ops.function.FnMut F Usize T) (f : F)
+    (P : Nat → T → Prop)
+    (hcall : ∀ f' (j : Usize), j.val < N.val →
+      inst.call_mut f' j ⦃ (val, _) => P j.val val ⦄) :
+    core.array.from_fn N inst f
+      ⦃ (arr : Array T N) => ∀ j, j < N.val → P j arr.val[j]! ⦄ := by
+  unfold core.array.from_fn
+  exact core.array.from_fn_aux_spec N inst.call_mut P hcall f 0 [] (by simp)
+    (by scalar_tac) (by intro j hj; scalar_tac)
+
 end Aeneas.Std

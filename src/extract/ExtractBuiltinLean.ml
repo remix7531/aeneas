@@ -372,6 +372,8 @@ let lean_builtin_funs =
     mk_fun
       "core::array::{core::fmt::Debug<core::array::TryFromSliceError>}::fmt"
       "core.array.DebugTryFromSliceError.fmt";
+    (* file: "Aeneas/Std/Array/ArraySlice.lean", line: 380 *)
+    mk_fun "core::array::from_fn" "core.array.from_fn";
     (* file: "Aeneas/Std/Array/ArraySlice.lean", line: 86 *)
     mk_fun "core::array::{core::ops::index::Index<[@T; @N], @I, @O>}::index"
       "core.array.Array.index";
