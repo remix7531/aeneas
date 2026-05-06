@@ -176,6 +176,26 @@ def core.array.TryFromSharedArraySlice.try_from
   if h: s.len = N then .ok (.Ok ⟨s.val, by scalar_tac⟩)
   else .ok (.Err ())
 
+/-- When the slice has the right length, `try_from` returns `.Ok` with the
+slice contents repackaged as an array. -/
+@[step]
+theorem core.array.TryFromSharedArraySlice.try_from.step_spec
+    {T : Type} (N : Usize) (s : Slice T) (h : s.length = N.val) :
+    core.array.TryFromSharedArraySlice.try_from N s
+      ⦃ r => ∃ a : Array T N, r = core.result.Result.Ok a ∧ a.val = s.val ⦄ := by
+  unfold core.array.TryFromSharedArraySlice.try_from
+  have hlen : s.len = N := UScalar.eq_of_val_eq (by simp [h])
+  simp [hlen]
+
+/-- `Result.unwrap` extracts the value when the result is statically known
+to be `.Ok`. -/
+@[step]
+theorem core.result.Result.unwrap.step_spec
+    {T E : Type} (D : core.fmt.Debug E) (r : core.result.Result T E) (a : T)
+    (h : r = core.result.Result.Ok a) :
+    core.result.Result.unwrap D r ⦃ x => x = a ⦄ := by
+  rw [h]; simp [core.result.Result.unwrap]
+
 @[reducible, rust_trait_impl
   "core::convert::TryFrom<&'a [@T; @N], &'a [@T], core::array::TryFromSliceError>"]
 def core.convert.TryFromSharedArraySliceTryFromSliceError (T : Type) (N : Usize) :
