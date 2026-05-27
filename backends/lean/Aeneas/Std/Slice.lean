@@ -365,8 +365,7 @@ def core.slice.Slice.get_unchecked
   {T : Type} {I : Type} {Output : Type}
   (SliceIndexInst : core.slice.index.SliceIndex I (Slice T) Output)
   (s : Slice T) (i : I) : Result Output :=
-  -- TODO: we should actually use the `SliceIndexInst.get_unchecked` method
-  sorry
+  SliceIndexInst.index i s
 
 @[rust_fun "core::slice::{[@T]}::get_mut"]
 def core.slice.Slice.get_mut
@@ -583,12 +582,16 @@ def core.slice.index.SliceIndexUsizeSlice (T : Type) :
   index_mut := core.slice.index.Usize.index_mut
 }
 
+/-- **Spec theorem for `core::slice::{[@T]}::get_unchecked`** at the `Usize` index.
+    Within bounds, `get_unchecked` returns the element at index `i`. -/
 @[step]
-theorem core.slice.Slice.get_unchecked_SliceIndexUsizeSlice_spec {T s i} [Inhabited T]
-  (h : i.val < s.length) :
-  core.slice.Slice.get_unchecked  (core.slice.index.SliceIndexUsizeSlice T) s i
-  ⦃ x => x = s[i] ⦄ := by
-  sorry
+theorem core.slice.Slice.get_unchecked_SliceIndexUsizeSlice_spec
+  {T : Type} (s : Slice T) (i : Usize) (h : i.val < s.length) :
+  core.slice.Slice.get_unchecked (core.slice.index.SliceIndexUsizeSlice T) s i
+  ⦃ (x : T) => x = s.val[i.val] ⦄ := by
+  simp only [get_unchecked, core.slice.index.Usize.index]
+  have ⟨ x, hx ⟩ := spec_imp_exists (Slice.index_usize_spec s i h)
+  simp [hx]
 
 @[rust_fun "core::slice::{[@T]}::copy_from_slice"]
 def core.slice.Slice.copy_from_slice {T : Type} (_ : core.marker.Copy T)
